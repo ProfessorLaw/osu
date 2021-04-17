@@ -34,11 +34,6 @@ namespace osu.Game.Tests.Visual
     [TestFixture]
     public class TestSceneOsuGame : OsuTestScene
     {
-        public override IReadOnlyList<Type> RequiredTypes => new[]
-        {
-            typeof(OsuLogo),
-        };
-
         private IReadOnlyList<Type> requiredGameDependencies => new[]
         {
             typeof(OsuGame),
@@ -47,8 +42,9 @@ namespace osu.Game.Tests.Visual
             typeof(IdleTracker),
             typeof(OnScreenDisplay),
             typeof(NotificationOverlay),
-            typeof(DirectOverlay),
-            typeof(SocialOverlay),
+            typeof(BeatmapListingOverlay),
+            typeof(DashboardOverlay),
+            typeof(NewsOverlay),
             typeof(ChannelManager),
             typeof(ChatOverlay),
             typeof(SettingsOverlay),
@@ -111,7 +107,7 @@ namespace osu.Game.Tests.Visual
                 foreach (var type in requiredGameDependencies)
                 {
                     if (game.Dependencies.Get(type) == null)
-                        throw new Exception($"{type} has not been cached");
+                        throw new InvalidOperationException($"{type} has not been cached");
                 }
 
                 return true;
@@ -121,7 +117,7 @@ namespace osu.Game.Tests.Visual
                 foreach (var type in requiredGameBaseDependencies)
                 {
                     if (gameBase.Dependencies.Get(type) == null)
-                        throw new Exception($"{type} has not been cached");
+                        throw new InvalidOperationException($"{type} has not been cached");
                 }
 
                 return true;

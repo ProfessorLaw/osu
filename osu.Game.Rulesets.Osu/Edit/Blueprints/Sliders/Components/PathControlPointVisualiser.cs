@@ -3,9 +3,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Linq;
 using Humanizer;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Cursor;
@@ -14,8 +16,10 @@ using osu.Framework.Input;
 using osu.Framework.Input.Bindings;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics.UserInterface;
+using osu.Game.Rulesets.Objects;
+using osu.Game.Rulesets.Objects.Types;
 using osu.Game.Rulesets.Osu.Objects;
-using osu.Game.Screens.Edit.Compose;
+using osu.Game.Screens.Edit;
 using osuTK;
 using osuTK.Input;
 
@@ -23,16 +27,18 @@ namespace osu.Game.Rulesets.Osu.Edit.Blueprints.Sliders.Components
 {
     public class PathControlPointVisualiser : CompositeDrawable, IKeyBindingHandler<PlatformAction>, IHasContextMenu
     {
-        public Action<Vector2[]> ControlPointsChanged;
+        public override bool ReceivePositionalInputAt(Vector2 screenSpacePos) => true; // allow context menu to appear outside of the playfield.
 
         internal readonly Container<PathControlPointPiece> Pieces;
+        internal readonly Container<PathControlPointConnectionPiece> Connections;
+
+        private readonly IBindableList<PathControlPoint> controlPoints = new BindableList<PathControlPoint>();
         private readonly Slider slider;
         private readonly bool allowSelection;
 
         private InputManager inputManager;
 
-        [Resolved(CanBeNull = true)]
-        private IPlacementHandler placementHandler { get; set; }
+        public Action<List<PathControlPoint>> RemoveControlPointsRequested;
 
         public PathControlPointVisualiser(Slider slider, bool allowSelection)
         {
@@ -41,7 +47,11 @@ namespace osu.Game.Rulesets.Osu.Edit.Blueprints.Sliders.Components
 
             RelativeSizeAxes = Axes.Both;
 
-            InternalChild = Pieces = new Container<PathControlPointPiece> { RelativeSizeAxes = Axes.Both };
+            InternalChildren = new Drawable[]
+            {
+                Connections = new Container<PathControlPointConnectionPiece> { RelativeSizeAxes = Axes.Both },
+                Pieces = new Container<PathControlPointPiece> { RelativeSizeAxes = Axes.Both }
+            };
         }
 
         protected override void LoadComplete()
@@ -49,33 +59,71 @@ namespace osu.Game.Rulesets.Osu.Edit.Blueprints.Sliders.Components
             base.LoadComplete();
 
             inputManager = GetContainingInputManager();
+
+            controlPoints.CollectionChanged += onControlPointsChanged;
+            controlPoints.BindTo(slider.Path.ControlPoints);
         }
 
-        protected override void Update()
+        private void onControlPointsChanged(object sender, NotifyCollectionChangedEventArgs e)
         {
-            base.Update();
-
-            while (slider.Path.ControlPoints.Length > Pieces.Count)
+            switch (e.Action)
             {
-                var piece = new PathControlPointPiece(slider, Pieces.Count)
-                {
-                    ControlPointsChanged = c => ControlPointsChanged?.Invoke(c),
-                };
+                case NotifyCollectionChangedAction.Add:
+                    // If inserting in the path (not appending),
+                    // update indices of existing connections after insert location
+                    if (e.NewStartingIndex < Pieces.Count)
+                    {
+                        foreach (var connection in Connections)
+                        {
+                            if (connection.ControlPointIndex >= e.NewStartingIndex)
+                                connection.ControlPointIndex += e.NewItems.Count;
+                        }
+                    }
 
-                if (allowSelection)
-                    piece.RequestSelection = selectPiece;
+                    for (int i = 0; i < e.NewItems.Count; i++)
+                    {
+                        var point = (PathControlPoint)e.NewItems[i];
 
-                Pieces.Add(piece);
+                        Pieces.Add(new PathControlPointPiece(slider, point).With(d =>
+                        {
+                            if (allowSelection)
+                                d.RequestSelection = selectPiece;
+                        }));
+
+                        Connections.Add(new PathControlPointConnectionPiece(slider, e.NewStartingIndex + i));
+                    }
+
+                    break;
+
+                case NotifyCollectionChangedAction.Remove:
+                    foreach (var point in e.OldItems.Cast<PathControlPoint>())
+                    {
+                        Pieces.RemoveAll(p => p.ControlPoint == point);
+                        Connections.RemoveAll(c => c.ControlPoint == point);
+                    }
+
+                    // If removing before the end of the path,
+                    // update indices of connections after remove location
+                    if (e.OldStartingIndex < Pieces.Count)
+                    {
+                        foreach (var connection in Connections)
+                        {
+                            if (connection.ControlPointIndex >= e.OldStartingIndex)
+                                connection.ControlPointIndex -= e.OldItems.Count;
+                        }
+                    }
+
+                    break;
             }
-
-            while (slider.Path.ControlPoints.Length < Pieces.Count)
-                Pieces.Remove(Pieces[Pieces.Count - 1]);
         }
 
         protected override bool OnClick(ClickEvent e)
         {
             foreach (var piece in Pieces)
+            {
                 piece.IsSelected.Value = false;
+            }
+
             return false;
         }
 
@@ -84,59 +132,74 @@ namespace osu.Game.Rulesets.Osu.Edit.Blueprints.Sliders.Components
             switch (action.ActionMethod)
             {
                 case PlatformActionMethod.Delete:
-                    return deleteSelected();
+                    return DeleteSelected();
             }
 
             return false;
         }
 
-        public bool OnReleased(PlatformAction action) => action.ActionMethod == PlatformActionMethod.Delete;
+        public void OnReleased(PlatformAction action)
+        {
+        }
 
-        private void selectPiece(int index, MouseButtonEvent e)
+        private void selectPiece(PathControlPointPiece piece, MouseButtonEvent e)
         {
             if (e.Button == MouseButton.Left && inputManager.CurrentState.Keyboard.ControlPressed)
-                Pieces[index].IsSelected.Toggle();
+                piece.IsSelected.Toggle();
             else
             {
-                foreach (var piece in Pieces)
-                    piece.IsSelected.Value = piece.Index == index;
+                foreach (var p in Pieces)
+                    p.IsSelected.Value = p == piece;
             }
         }
 
-        private bool deleteSelected()
+        /// <summary>
+        /// Attempts to set the given control point piece to the given path type.
+        /// If that would fail, try to change the path such that it instead succeeds
+        /// in a UX-friendly way.
+        /// </summary>
+        /// <param name="piece">The control point piece that we want to change the path type of.</param>
+        /// <param name="type">The path type we want to assign to the given control point piece.</param>
+        private void updatePathType(PathControlPointPiece piece, PathType? type)
         {
-            var newControlPoints = new List<Vector2>();
+            int indexInSegment = piece.PointsInSegment.IndexOf(piece.ControlPoint);
 
-            foreach (var piece in Pieces)
+            switch (type)
             {
-                if (!piece.IsSelected.Value)
-                    newControlPoints.Add(slider.Path.ControlPoints[piece.Index]);
+                case PathType.PerfectCurve:
+                    // Can't always create a circular arc out of 4 or more points,
+                    // so we split the segment into one 3-point circular arc segment
+                    // and one segment of the previous type.
+                    int thirdPointIndex = indexInSegment + 2;
+
+                    if (piece.PointsInSegment.Count > thirdPointIndex + 1)
+                        piece.PointsInSegment[thirdPointIndex].Type.Value = piece.PointsInSegment[0].Type.Value;
+
+                    break;
             }
+
+            piece.ControlPoint.Type.Value = type;
+        }
+
+        [Resolved(CanBeNull = true)]
+        private IEditorChangeHandler changeHandler { get; set; }
+
+        public bool DeleteSelected()
+        {
+            List<PathControlPoint> toRemove = Pieces.Where(p => p.IsSelected.Value).Select(p => p.ControlPoint).ToList();
 
             // Ensure that there are any points to be deleted
-            if (newControlPoints.Count == slider.Path.ControlPoints.Length)
+            if (toRemove.Count == 0)
                 return false;
 
-            // If there are 0 remaining control points, treat the slider as being deleted
-            if (newControlPoints.Count == 0)
-            {
-                placementHandler?.Delete(slider);
-                return true;
-            }
-
-            // Make control points relative
-            Vector2 first = newControlPoints[0];
-            for (int i = 0; i < newControlPoints.Count; i++)
-                newControlPoints[i] = newControlPoints[i] - first;
-
-            // The slider's position defines the position of the first control point, and all further control points are relative to that point
-            slider.Position = slider.Position + first;
+            changeHandler?.BeginChange();
+            RemoveControlPointsRequested?.Invoke(toRemove);
+            changeHandler?.EndChange();
 
             // Since pieces are re-used, they will not point to the deleted control points while remaining selected
             foreach (var piece in Pieces)
                 piece.IsSelected.Value = false;
 
-            ControlPointsChanged?.Invoke(newControlPoints.ToArray());
             return true;
         }
 
@@ -147,16 +210,63 @@ namespace osu.Game.Rulesets.Osu.Edit.Blueprints.Sliders.Components
                 if (!Pieces.Any(p => p.IsHovered))
                     return null;
 
-                int selectedPoints = Pieces.Count(p => p.IsSelected.Value);
+                var selectedPieces = Pieces.Where(p => p.IsSelected.Value).ToList();
+                int count = selectedPieces.Count;
 
-                if (selectedPoints == 0)
+                if (count == 0)
                     return null;
+
+                List<MenuItem> items = new List<MenuItem>();
+
+                if (!selectedPieces.Contains(Pieces[0]))
+                    items.Add(createMenuItemForPathType(null));
+
+                // todo: hide/disable items which aren't valid for selected points
+                items.Add(createMenuItemForPathType(PathType.Linear));
+                items.Add(createMenuItemForPathType(PathType.PerfectCurve));
+                items.Add(createMenuItemForPathType(PathType.Bezier));
+                items.Add(createMenuItemForPathType(PathType.Catmull));
 
                 return new MenuItem[]
                 {
-                    new OsuMenuItem($"Delete {"control point".ToQuantity(selectedPoints)}", MenuItemType.Destructive, () => deleteSelected())
+                    new OsuMenuItem($"Delete {"control point".ToQuantity(count, count > 1 ? ShowQuantityAs.Numeric : ShowQuantityAs.None)}", MenuItemType.Destructive, () => DeleteSelected()),
+                    new OsuMenuItem("Curve type")
+                    {
+                        Items = items
+                    }
                 };
             }
+        }
+
+        private MenuItem createMenuItemForPathType(PathType? type)
+        {
+            int totalCount = Pieces.Count(p => p.IsSelected.Value);
+            int countOfState = Pieces.Where(p => p.IsSelected.Value).Count(p => p.ControlPoint.Type.Value == type);
+
+            var item = new PathTypeMenuItem(type, () =>
+            {
+                foreach (var p in Pieces.Where(p => p.IsSelected.Value))
+                    updatePathType(p, type);
+            });
+
+            if (countOfState == totalCount)
+                item.State.Value = TernaryState.True;
+            else if (countOfState > 0)
+                item.State.Value = TernaryState.Indeterminate;
+            else
+                item.State.Value = TernaryState.False;
+
+            return item;
+        }
+
+        private class PathTypeMenuItem : TernaryStateMenuItem
+        {
+            public PathTypeMenuItem(PathType? type, Action action)
+                : base(type == null ? "Inherit" : type.ToString().Humanize(), changeState, MenuItemType.Standard, _ => action?.Invoke())
+            {
+            }
+
+            private static TernaryState changeState(TernaryState state) => TernaryState.True;
         }
     }
 }

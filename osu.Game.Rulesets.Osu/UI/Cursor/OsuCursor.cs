@@ -20,7 +20,9 @@ namespace osu.Game.Rulesets.Osu.UI.Cursor
 
         private bool cursorExpand;
 
-        private Container expandTarget;
+        private SkinnableDrawable cursorSprite;
+
+        private Drawable expandTarget => (cursorSprite.Drawable as OsuCursorSprite)?.ExpandTarget ?? cursorSprite;
 
         public OsuCursor()
         {
@@ -37,12 +39,12 @@ namespace osu.Game.Rulesets.Osu.UI.Cursor
         [BackgroundDependencyLoader]
         private void load()
         {
-            InternalChild = expandTarget = new Container
+            InternalChild = new Container
             {
                 RelativeSizeAxes = Axes.Both,
                 Origin = Anchor.Centre,
                 Anchor = Anchor.Centre,
-                Child = new SkinnableDrawable(new OsuSkinComponent(OsuSkinComponents.Cursor), _ => new DefaultCursor(), confineMode: ConfineMode.NoScaling)
+                Child = cursorSprite = new SkinnableDrawable(new OsuSkinComponent(OsuSkinComponents.Cursor), _ => new DefaultCursor(), confineMode: ConfineMode.NoScaling)
                 {
                     Origin = Anchor.Centre,
                     Anchor = Anchor.Centre,
@@ -57,12 +59,12 @@ namespace osu.Game.Rulesets.Osu.UI.Cursor
         {
             if (!cursorExpand) return;
 
-            expandTarget.ScaleTo(released_scale).ScaleTo(pressed_scale, 100, Easing.OutQuad);
+            expandTarget.ScaleTo(released_scale).ScaleTo(pressed_scale, 400, Easing.OutElasticHalf);
         }
 
-        public void Contract() => expandTarget.ScaleTo(released_scale, 100, Easing.OutQuad);
+        public void Contract() => expandTarget.ScaleTo(released_scale, 400, Easing.OutQuad);
 
-        private class DefaultCursor : CompositeDrawable
+        private class DefaultCursor : OsuCursorSprite
         {
             public DefaultCursor()
             {
@@ -71,10 +73,12 @@ namespace osu.Game.Rulesets.Osu.UI.Cursor
                 Anchor = Anchor.Centre;
                 Origin = Anchor.Centre;
 
-                InternalChildren = new Drawable[]
+                InternalChildren = new[]
                 {
-                    new CircularContainer
+                    ExpandTarget = new CircularContainer
                     {
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
                         RelativeSizeAxes = Axes.Both,
                         Masking = true,
                         BorderThickness = size / 6,
@@ -111,24 +115,22 @@ namespace osu.Game.Rulesets.Osu.UI.Cursor
                                     },
                                 },
                             },
-                            new CircularContainer
-                            {
-                                Origin = Anchor.Centre,
-                                Anchor = Anchor.Centre,
-                                RelativeSizeAxes = Axes.Both,
-                                Scale = new Vector2(0.1f),
-                                Masking = true,
-                                Children = new Drawable[]
-                                {
-                                    new Box
-                                    {
-                                        RelativeSizeAxes = Axes.Both,
-                                        Colour = Color4.White,
-                                    },
-                                },
-                            },
-                        }
-                    }
+                        },
+                    },
+                    new Circle
+                    {
+                        Origin = Anchor.Centre,
+                        Anchor = Anchor.Centre,
+                        RelativeSizeAxes = Axes.Both,
+                        Scale = new Vector2(0.14f),
+                        Colour = new Color4(34, 93, 204, 255),
+                        EdgeEffect = new EdgeEffectParameters
+                        {
+                            Type = EdgeEffectType.Glow,
+                            Radius = 8,
+                            Colour = Color4.White,
+                        },
+                    },
                 };
             }
         }

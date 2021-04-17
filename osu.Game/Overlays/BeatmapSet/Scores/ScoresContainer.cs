@@ -5,8 +5,6 @@ using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
-using osu.Game.Graphics;
-using osu.Game.Graphics.UserInterface;
 using osuTK;
 using System.Linq;
 using osu.Game.Online.API.Requests.Responses;
@@ -14,100 +12,104 @@ using osu.Game.Beatmaps;
 using osu.Game.Online.API;
 using osu.Game.Online.API.Requests;
 using osu.Framework.Bindables;
+using osu.Game.Graphics.UserInterface;
 using osu.Game.Rulesets;
 using osu.Game.Screens.Select.Leaderboards;
 using osu.Game.Users;
 
 namespace osu.Game.Overlays.BeatmapSet.Scores
 {
-    public class ScoresContainer : CompositeDrawable
+    public class ScoresContainer : BeatmapSetLayoutSection
     {
         private const int spacing = 15;
 
         public readonly Bindable<BeatmapInfo> Beatmap = new Bindable<BeatmapInfo>();
         private readonly Bindable<RulesetInfo> ruleset = new Bindable<RulesetInfo>();
-        private readonly Bindable<BeatmapLeaderboardScope> scope = new Bindable<BeatmapLeaderboardScope>();
-        private readonly Bindable<User> user = new Bindable<User>();
+        private readonly Bindable<BeatmapLeaderboardScope> scope = new Bindable<BeatmapLeaderboardScope>(BeatmapLeaderboardScope.Global);
+        private readonly IBindable<User> user = new Bindable<User>();
 
         private readonly Box background;
         private readonly ScoreTable scoreTable;
         private readonly FillFlowContainer topScoresContainer;
-        private readonly DimmedLoadingLayer loading;
-        private readonly FillFlowContainer filterControls;
+        private readonly LoadingLayer loading;
         private readonly LeaderboardModSelector modSelector;
         private readonly NoScoresPlaceholder noScoresPlaceholder;
-        private readonly FillFlowContainer content;
+        private readonly NotSupporterPlaceholder notSupporterPlaceholder;
 
         [Resolved]
         private IAPIProvider api { get; set; }
+
+        [Resolved]
+        private RulesetStore rulesets { get; set; }
 
         private GetScoresRequest getScoresRequest;
 
         protected APILegacyScores Scores
         {
-            set
+            set => Schedule(() =>
             {
-                Schedule(() =>
+                topScoresContainer.Clear();
+
+                if (value?.Scores.Any() != true)
                 {
-                    topScoresContainer.Clear();
+                    scoreTable.ClearScores();
+                    scoreTable.Hide();
+                    return;
+                }
 
-                    if (value?.Scores.Any() != true)
-                    {
-                        scoreTable.Scores = null;
-                        scoreTable.Hide();
-                        return;
-                    }
+                var scoreInfos = value.Scores.Select(s => s.CreateScoreInfo(rulesets)).ToList();
+                var topScore = scoreInfos.First();
 
-                    scoreTable.Scores = value.Scores;
-                    scoreTable.Show();
+                scoreTable.DisplayScores(scoreInfos, topScore.Beatmap?.Status == BeatmapSetOnlineStatus.Ranked);
+                scoreTable.Show();
 
-                    var topScore = value.Scores.First();
-                    var userScore = value.UserScore;
+                var userScore = value.UserScore;
+                var userScoreInfo = userScore?.Score.CreateScoreInfo(rulesets);
 
-                    topScoresContainer.Add(new DrawableTopScore(topScore));
+                topScoresContainer.Add(new DrawableTopScore(topScore));
 
-                    if (userScore != null && userScore.Score.OnlineScoreID != topScore.OnlineScoreID)
-                        topScoresContainer.Add(new DrawableTopScore(userScore.Score, userScore.Position));
-                });
-            }
+                if (userScoreInfo != null && userScoreInfo.OnlineScoreID != topScore.OnlineScoreID)
+                    topScoresContainer.Add(new DrawableTopScore(userScoreInfo, userScore.Position));
+            });
         }
 
         public ScoresContainer()
         {
-            RelativeSizeAxes = Axes.X;
-            AutoSizeAxes = Axes.Y;
-            InternalChildren = new Drawable[]
+            AddRange(new Drawable[]
             {
                 background = new Box
                 {
                     RelativeSizeAxes = Axes.Both,
                 },
-                content = new FillFlowContainer
+                new FillFlowContainer
                 {
                     Anchor = Anchor.TopCentre,
                     Origin = Anchor.TopCentre,
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Width = 0.95f,
                     Direction = FillDirection.Vertical,
-                    Margin = new MarginPadding { Vertical = spacing },
+                    Padding = new MarginPadding { Horizontal = 50 },
+                    Margin = new MarginPadding { Vertical = 20 },
                     Children = new Drawable[]
                     {
-                        filterControls = new FillFlowContainer
+                        new FillFlowContainer
                         {
-                            Anchor = Anchor.TopCentre,
-                            Origin = Anchor.TopCentre,
-                            AutoSizeAxes = Axes.Both,
+                            RelativeSizeAxes = Axes.X,
+                            AutoSizeAxes = Axes.Y,
                             Direction = FillDirection.Vertical,
                             Spacing = new Vector2(0, spacing),
                             Children = new Drawable[]
                             {
                                 new LeaderboardScopeSelector
                                 {
+                                    Anchor = Anchor.TopCentre,
+                                    Origin = Anchor.TopCentre,
                                     Current = { BindTarget = scope }
                                 },
                                 modSelector = new LeaderboardModSelector
                                 {
+                                    Anchor = Anchor.TopCentre,
+                                    Origin = Anchor.TopCentre,
                                     Ruleset = { BindTarget = ruleset }
                                 }
                             }
@@ -116,7 +118,7 @@ namespace osu.Game.Overlays.BeatmapSet.Scores
                         {
                             AutoSizeAxes = Axes.Y,
                             RelativeSizeAxes = Axes.X,
-                            Margin = new MarginPadding { Vertical = spacing },
+                            Margin = new MarginPadding { Top = spacing },
                             Children = new Drawable[]
                             {
                                 noScoresPlaceholder = new NoScoresPlaceholder
@@ -126,6 +128,12 @@ namespace osu.Game.Overlays.BeatmapSet.Scores
                                     Alpha = 0,
                                     AlwaysPresent = true,
                                     Margin = new MarginPadding { Vertical = 10 }
+                                },
+                                notSupporterPlaceholder = new NotSupporterPlaceholder
+                                {
+                                    Anchor = Anchor.TopCentre,
+                                    Origin = Anchor.TopCentre,
+                                    Alpha = 0,
                                 },
                                 new FillFlowContainer
                                 {
@@ -149,27 +157,18 @@ namespace osu.Game.Overlays.BeatmapSet.Scores
                                         }
                                     }
                                 },
-                                new Container
-                                {
-                                    RelativeSizeAxes = Axes.Both,
-                                    Masking = true,
-                                    CornerRadius = 10,
-                                    Child = loading = new DimmedLoadingLayer(iconScale: 0.8f)
-                                    {
-                                        Alpha = 0,
-                                    },
-                                }
                             }
                         }
-                    }
+                    },
                 },
-            };
+                loading = new LoadingLayer()
+            });
         }
 
         [BackgroundDependencyLoader]
-        private void load(OsuColour colours)
+        private void load(OverlayColourProvider colourProvider)
         {
-            background.Colour = colours.Gray2;
+            background.Colour = colourProvider.Background5;
 
             user.BindTo(api.LocalUser);
         }
@@ -180,8 +179,7 @@ namespace osu.Game.Overlays.BeatmapSet.Scores
             scope.BindValueChanged(_ => getScores());
             ruleset.BindValueChanged(_ => getScores());
 
-            modSelector.SelectedMods.ItemsAdded += _ => getScores();
-            modSelector.SelectedMods.ItemsRemoved += _ => getScores();
+            modSelector.SelectedMods.CollectionChanged += (_, __) => getScores();
 
             Beatmap.BindValueChanged(onBeatmapChanged);
             user.BindValueChanged(onUserChanged, true);
@@ -204,9 +202,12 @@ namespace osu.Game.Overlays.BeatmapSet.Scores
 
         private void onUserChanged(ValueChangedEvent<User> user)
         {
-            scope.Value = BeatmapLeaderboardScope.Global;
-            modSelector.DeselectAll();
-            filterControls.FadeTo(api.IsLoggedIn && api.LocalUser.Value.IsSupporter ? 1 : 0);
+            if (modSelector.SelectedMods.Any())
+                modSelector.DeselectAll();
+            else
+                getScores();
+
+            modSelector.FadeTo(userIsSupporter ? 1 : 0);
         }
 
         private void getScores()
@@ -219,17 +220,31 @@ namespace osu.Game.Overlays.BeatmapSet.Scores
             if (Beatmap.Value?.OnlineBeatmapID.HasValue != true || Beatmap.Value.Status <= BeatmapSetOnlineStatus.Pending)
             {
                 Scores = null;
-                content.Hide();
+                Hide();
                 return;
             }
 
-            content.Show();
+            if (scope.Value != BeatmapLeaderboardScope.Global && !userIsSupporter)
+            {
+                Scores = null;
+                notSupporterPlaceholder.Show();
+
+                loading.Hide();
+                loading.FinishTransforms();
+                return;
+            }
+
+            notSupporterPlaceholder.Hide();
+
+            Show();
             loading.Show();
 
             getScoresRequest = new GetScoresRequest(Beatmap.Value, Beatmap.Value.Ruleset, scope.Value, modSelector.SelectedMods);
             getScoresRequest.Success += scores =>
             {
                 loading.Hide();
+                loading.FinishTransforms();
+
                 Scores = scores;
 
                 if (!scores.Scores.Any())
@@ -238,5 +253,7 @@ namespace osu.Game.Overlays.BeatmapSet.Scores
 
             api.Queue(getScoresRequest);
         }
+
+        private bool userIsSupporter => api.IsLoggedIn && api.LocalUser.Value.IsSupporter;
     }
 }
